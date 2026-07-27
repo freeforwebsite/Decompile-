@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>APKtrace — Full APK Decompiler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #10131a;
+    --panel: #161b25;
+    --panel-line: #262d3a;
+    --ink: #e7e6e0;
+    --dim: #8a92a3;
+    --amber: #e8a33d;
+    --teal: #5fd4c4;
+    --danger: #e2645a;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'Inter', sans-serif;
+  }
+  *{ box-sizing: border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    min-height: 100vh;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  .wrap{ max-width: 960px; margin: 0 auto; padding: 56px 24px 100px; }
+
+  header{ margin-bottom: 40px; }
+  .eyebrow{
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    color: var(--teal);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .eyebrow::before{ content:"0x00 "; color: var(--dim); }
+  h1{
+    font-family: var(--mono);
+    font-size: clamp(28px, 5vw, 44px);
+    font-weight: 700;
+    margin: 0 0 12px;
+    letter-spacing: -0.01em;
+  }
+  h1 span{ color: var(--amber); }
+  header p{
+    color: var(--dim);
+    max-width: 560px;
+    line-height: 1.6;
+    font-size: 15px;
+  }
+
+  .drop{
+    border: 1px dashed var(--panel-line);
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 44px 28px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+    position: relative;
+  }
+  .drop.drag{ border-color: var(--amber); background: #1b2130; }
+  .drop input{ display:none; }
+  .drop-icon{
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--dim);
+    letter-spacing: 0.08em;
+  }
+  .drop-title{ font-size: 17px; font-weight: 600; margin: 14px 0 6px; }
+  .drop-sub{ color: var(--dim); font-size: 13px; }
+
+  .file-chip{
+    display:none;
+    align-items:center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--panel);
+    border: 1px solid var(--panel-line);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-top: 18px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .file-chip button{
+    background: var(--amber);
+    color: #1a1300;
+    border: none;
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 13px;
+    padding: 9px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .file-chip button:disabled{ opacity: 0.5; cursor: not-allowed; }
+
+  .console{
+    display:none;
+    margin-top: 28px;
+    background: #0c0f15;
+    border: 1px solid var(--panel-line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .console-bar{
+    display:flex; align-items:center; gap:8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--panel-line);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--dim);
+  }
+  .dot{ width:8px; height:8px; border-radius:50%; background: var(--panel-line); }
+  .dot.live{ background: var(--amber); box-shadow: 0 0 0 3px rgba(232,163,61,0.15); }
+  .console-log{
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.9;
+    padding: 16px;
+    color: #b9c2d0;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .console-log .ln{ color: var(--dim); margin-right: 10px; }
+  .console-log .done{ color: var(--teal); }
+  .console-log .err{ color: var(--danger); }
+
+  .results{ display:none; margin-top: 28px; }
+  .summary-grid{
+    display:grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--panel-line);
+    border: 1px solid var(--panel-line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  @media (max-width: 620px){ .summary-grid{ grid-template-columns: 1fr; } }
+  .cell{ background: var(--panel); padding: 18px 20px; }
+  .cell .k{
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  .cell .v{ font-family: var(--mono); font-size: 14px; word-break: break-all; }
+  .cell .v.empty{ color: var(--dim); }
+
+  .tree{
+    margin-top: 18px;
+    background: var(--panel);
+    border: 1px solid var(--panel-line);
+    border-radius: 10px;
+    padding: 6px 0;
+  }
+  .tree-head{
+    display:flex; justify-content: space-between; align-items:center;
+    padding: 14px 20px 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .tree-head .count{ color: var(--amber); }
+  .tree-body{
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 0 20px 14px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: #c7cede;
+  }
+  .tree-body .row{ padding: 3px 0; border-bottom: 1px dotted #232a37; }
+  .tree-body .row:last-child{ border-bottom: none; }
+  .tree-empty{ padding: 0 20px 16px; color: var(--dim); font-family: var(--mono); font-size: 12.5px; }
+
+  .downloads{
+    margin-top: 24px;
+    display:flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .dl{
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    padding: 12px 18px;
+    border-radius: 7px;
+    border: 1px solid var(--panel-line);
+    color: var(--ink);
+    background: var(--panel);
+    transition: border-color .15s ease;
+  }
+  .dl:hover{ border-color: var(--teal); }
+  .dl.primary{ background: var(--amber); color:#1a1300; border-color: var(--amber); }
+
+  .error-box{
+    display:none;
+    margin-top: 24px;
+    border: 1px solid rgba(226,100,90,0.4);
+    background: rgba(226,100,90,0.08);
+    color: #f0a49e;
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+
+  footer{
+    margin-top: 60px;
+    color: var(--dim);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="eyebrow">apk / manifest / smali / java</div>
+      <h1>Decompile any <span>.apk</span> in full.</h1>
+      <p>Upload an Android package and get back the decoded manifest, permissions, resources, and readable Java source — reconstructed straight from the bytecode, on this server.</p>
+    </header>
+
+    <div class="drop" id="drop">
+      <input type="file" id="fileInput" accept=".apk" />
+      <div class="drop-icon">[ drag file here ]</div>
+      <div class="drop-title">Drop an APK, or click to browse</div>
+      <div class="drop-sub">Max 250MB · processed and discarded after 1 hour</div>
+    </div>
+
+    <div class="file-chip" id="fileChip">
+      <span id="fileName"></span>
+      <button id="goBtn">Decompile</button>
+    </div>
+
+    <div class="console" id="console">
+      <div class="console-bar"><span class="dot live" id="consoleDot"></span><span id="consoleLabel">Working…</span></div>
+      <div class="console-log" id="consoleLog"></div>
+    </div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="results" id="results">
+      <div class="summary-grid" id="summaryGrid"></div>
+
+      <div class="tree" id="permTree">
+        <div class="tree-head"><span>Permissions</span><span class="count" id="permCount"></span></div>
+        <div class="tree-body" id="permBody"></div>
+      </div>
+
+      <div class="tree" id="actTree">
+        <div class="tree-head"><span>Activities / Services / Receivers</span><span class="count" id="actCount"></span></div>
+        <div class="tree-body" id="actBody"></div>
+      </div>
+
+      <div class="downloads">
+        <a class="dl primary" id="dlFull">Download full source (.zip)</a>
+        <a class="dl" id="dlSource">Java source only</a>
+        <a class="dl" id="dlResources">Resources + manifest</a>
+      </div>
+    </div>
+
+    <footer>apktool + jadx, running server-side · nothing is stored beyond the retention window</footer>
+  </div>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+const fileChip = document.getElementById('fileChip');
+const fileName = document.getElementById('fileName');
+const goBtn = document.getElementById('goBtn');
+const consoleEl = document.getElementById('console');
+const consoleLog = document.getElementById('consoleLog');
+const consoleDot = document.getElementById('consoleDot');
+const consoleLabel = document.getElementById('consoleLabel');
+const errorBox = document.getElementById('errorBox');
+const results = document.getElementById('results');
+
+let selectedFile = null;
+let logLine = 0;
+let lastStage = null;
+
+function pickFile(f){
+  if(!f) return;
+  if(!f.name.toLowerCase().endsWith('.apk')){
+    showError('Only .apk files are accepted.');
+    return;
+  }
+  selectedFile = f;
+  fileName.textContent = `${f.name}  ·  ${(f.size/1024/1024).toFixed(1)} MB`;
+  fileChip.style.display = 'flex';
+}
+
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', (e) => pickFile(e.target.files[0]));
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  drop.classList.remove('drag');
+  pickFile(e.dataTransfer.files[0]);
+});
+
+function showError(msg){
+  errorBox.textContent = `[error] ${msg}`;
+  errorBox.style.display = 'block';
+}
+function log(msg, cls){
+  logLine++;
+  const div = document.createElement('div');
+  div.innerHTML = `<span class="ln">${String(logLine).padStart(3,'0')}</span><span class="${cls||''}">${msg}</span>`;
+  consoleLog.appendChild(div);
+  consoleLog.scrollTop = consoleLog.scrollHeight;
+}
+
+goBtn.addEventListener('click', async () => {
+  if(!selectedFile) return;
+  goBtn.disabled = true;
+  errorBox.style.display = 'none';
+  results.style.display = 'none';
+  consoleEl.style.display = 'block';
+  consoleLog.innerHTML = '';
+  logLine = 0;
+  lastStage = null;
+  log('uploading ' + selectedFile.name + ' …');
+
+  const form = new FormData();
+  form.append('apk', selectedFile);
+
+  let jobId;
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: form });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Upload failed.');
+    jobId = data.jobId;
+    log('accepted — job ' + jobId);
+  } catch (err) {
+    consoleDot.classList.remove('live');
+    showError(err.message);
+    goBtn.disabled = false;
+    return;
+  }
+
+  poll(jobId);
+});
+
+function poll(jobId){
+  const iv = setInterval(async () => {
+    try {
+      const res = await fetch('/api/status/' + jobId);
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Job lost.');
+
+      if(data.stage && data.stage !== lastStage){
+        log(data.stage + ' …');
+        lastStage = data.stage;
+      }
+
+      if(data.status === 'error'){
+        clearInterval(iv);
+        consoleDot.classList.remove('live');
+        log(data.error || 'Decompilation failed.', 'err');
+        showError(data.error || 'Decompilation failed.');
+        goBtn.disabled = false;
+        return;
+      }
+
+      if(data.status === 'done'){
+        clearInterval(iv);
+        consoleDot.classList.remove('live');
+        log('done.', 'done');
+        consoleLabel.textContent = 'Complete';
+        renderResults(jobId, data.summary);
+        goBtn.disabled = false;
+      }
+    } catch (err) {
+      clearInterval(iv);
+      consoleDot.classList.remove('live');
+      showError(err.message);
+      goBtn.disabled = false;
+    }
+  }, 1500);
+}
+
+function cell(k, v){
+  const empty = (v === null || v === undefined || v === '');
+  return `<div class="cell"><div class="k">${k}</div><div class="v ${empty?'empty':''}">${empty ? '—' : v}</div></div>`;
+}
+
+function renderResults(jobId, s){
+  results.style.display = 'block';
+  const sizeMb = s.fileSizeBytes ? (s.fileSizeBytes/1024/1024).toFixed(2) + ' MB' : null;
+  document.getElementById('summaryGrid').innerHTML =
+    cell('Package', s.package) +
+    cell('Version', s.versionName ? `${s.versionName} (code ${s.versionCode || '—'})` : null) +
+    cell('SDK range', (s.minSdk || s.targetSdk) ? `min ${s.minSdk || '?'} · target ${s.targetSdk || '?'}` : null) +
+    cell('APK size', sizeMb);
+
+  document.getElementById('permCount').textContent = s.permissions.length;
+  document.getElementById('permBody').innerHTML = s.permissions.length
+    ? s.permissions.map(p => `<div class="row">${p}</div>`).join('')
+    : '';
+  if(!s.permissions.length) document.getElementById('permBody').innerHTML = '<div class="row" style="border:none;color:var(--dim)">none declared</div>';
+
+  const combined = [
+    ...s.activities.map(a => `activity · ${a}`),
+    ...s.services.map(a => `service · ${a}`),
+    ...s.receivers.map(a => `receiver · ${a}`),
+  ];
+  document.getElementById('actCount').textContent = combined.length;
+  document.getElementById('actBody').innerHTML = combined.length
+    ? combined.map(a => `<div class="row">${a}</div>`).join('')
+    : '<div class="row" style="border:none;color:var(--dim)">none found</div>';
+
+  document.getElementById('dlFull').href = `/api/download/${jobId}/full`;
+  document.getElementById('dlSource').href = `/api/download/${jobId}/source`;
+  document.getElementById('dlResources').href = `/api/download/${jobId}/resources`;
+}
+</script>
+</body>
+</html>
