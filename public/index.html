@@ -123,6 +123,16 @@
   }
   .dot{ width:8px; height:8px; border-radius:50%; background: var(--panel-line); }
   .dot.live{ background: var(--amber); box-shadow: 0 0 0 3px rgba(232,163,61,0.15); }
+  .ring{ display:none; flex-shrink:0; }
+  .ring.show{ display:block; }
+  .ring circle{ transition: stroke-dashoffset .2s ease; }
+  .ring-pct{
+    font-family: var(--mono);
+    color: var(--amber);
+    font-variant-numeric: tabular-nums;
+    min-width: 34px;
+    display:inline-block;
+  }
   .console-log{
     font-family: var(--mono);
     font-size: 12.5px;
@@ -251,7 +261,17 @@
     </div>
 
     <div class="console" id="console">
-      <div class="console-bar"><span class="dot live" id="consoleDot"></span><span id="consoleLabel">Working…</span></div>
+      <div class="console-bar">
+        <svg class="ring" id="uploadRing" width="18" height="18" viewBox="0 0 20 20">
+          <circle cx="10" cy="10" r="8" stroke="#262d3a" stroke-width="2.5" fill="none"/>
+          <circle cx="10" cy="10" r="8" stroke="#e8a33d" stroke-width="2.5" fill="none"
+            stroke-dasharray="50.27" stroke-dashoffset="50.27" id="uploadRingCircle"
+            stroke-linecap="round" transform="rotate(-90 10 10)"/>
+        </svg>
+        <span class="ring-pct" id="ringPct" style="display:none">0%</span>
+        <span class="dot live" id="consoleDot"></span>
+        <span id="consoleLabel">Working…</span>
+      </div>
       <div class="console-log" id="consoleLog"></div>
     </div>
 
@@ -290,6 +310,45 @@ const consoleEl = document.getElementById('console');
 const consoleLog = document.getElementById('consoleLog');
 const consoleDot = document.getElementById('consoleDot');
 const consoleLabel = document.getElementById('consoleLabel');
+const uploadRing = document.getElementById('uploadRing');
+const uploadRingCircle = document.getElementById('uploadRingCircle');
+const ringPct = document.getElementById('ringPct');
+const RING_CIRCUMFERENCE = 50.27;
+
+function setUploadProgress(pct){
+  uploadRing.classList.add('show');
+  ringPct.style.display = 'inline-block';
+  consoleDot.style.display = 'none';
+  uploadRingCircle.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - pct / 100));
+  ringPct.textContent = pct + '%';
+  consoleLabel.textContent = pct < 100 ? 'Uploading…' : 'Upload complete';
+}
+function switchToProcessingIndicator(){
+  uploadRing.classList.remove('show');
+  ringPct.style.display = 'none';
+  consoleDot.style.display = 'inline-block';
+  consoleDot.classList.add('live');
+}
+
+function xhrUpload(file, onProgress){
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let data;
+      try { data = JSON.parse(xhr.responseText); } catch(e) { data = {}; }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.error || 'Upload failed.'));
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload.'));
+    const form = new FormData();
+    form.append('apk', file);
+    xhr.send(form);
+  });
+}
 const errorBox = document.getElementById('errorBox');
 const results = document.getElementById('results');
 
@@ -339,19 +398,19 @@ goBtn.addEventListener('click', async () => {
   consoleLog.innerHTML = '';
   logLine = 0;
   lastStage = null;
+  setUploadProgress(0);
   log('uploading ' + selectedFile.name + ' …');
-
-  const form = new FormData();
-  form.append('apk', selectedFile);
 
   let jobId;
   try {
-    const res = await fetch('/api/upload', { method: 'POST', body: form });
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || 'Upload failed.');
+    const data = await xhrUpload(selectedFile, (pct) => setUploadProgress(pct));
     jobId = data.jobId;
+    switchToProcessingIndicator();
     log('accepted — job ' + jobId);
   } catch (err) {
+    uploadRing.classList.remove('show');
+    ringPct.style.display = 'none';
+    consoleDot.style.display = 'inline-block';
     consoleDot.classList.remove('live');
     showError(err.message);
     goBtn.disabled = false;
