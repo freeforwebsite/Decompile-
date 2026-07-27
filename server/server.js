@@ -14,6 +14,8 @@ const JADX_BIN = process.env.JADX_BIN || '/opt/tools/jadx/bin/jadx';
 const WORK_ROOT = process.env.WORK_ROOT || path.join(os.tmpdir(), 'apk-jobs');
 const MAX_UPLOAD_MB = parseInt(process.env.MAX_UPLOAD_MB || '250', 10);
 const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour, then a job's files are swept
+const APKTOOL_XMX = process.env.APKTOOL_XMX || '384m';
+const JADX_XMX = process.env.JADX_XMX || '384m';
 
 fs.mkdirSync(WORK_ROOT, { recursive: true });
 
@@ -147,8 +149,15 @@ function run(cmd, args, opts = {}) {
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${cmd} exited with code ${code}: ${stderr.slice(-2000)}`));
+      if (code === 0) return resolve();
+      if (/OutOfMemoryError/.test(stderr)) {
+        return reject(new Error(
+          'Ran out of memory decompiling this APK. The server instance doesn\'t have ' +
+          'enough RAM for a file this size — try a smaller APK, or ask the site owner to ' +
+          'upgrade the hosting plan\'s memory.'
+        ));
+      }
+      reject(new Error(`${cmd} exited with code ${code}: ${stderr.slice(-2000)}`));
     });
   });
 }
@@ -162,10 +171,12 @@ async function runPipeline(jobId) {
   job.status = 'processing';
 
   job.stage = 'Unpacking resources & manifest (apktool)';
-  await run('java', ['-jar', APKTOOL_JAR, 'd', '-f', '-o', resourcesDir, apkPath]);
+  await run('java', [`-Xmx${APKTOOL_XMX}`, '-jar', APKTOOL_JAR, 'd', '-f', '-o', resourcesDir, apkPath]);
 
   job.stage = 'Decompiling Java source (jadx)';
-  await run(JADX_BIN, ['-d', sourceDir, '--show-bad-code', apkPath]).catch((e) => {
+  await run(JADX_BIN, ['-d', sourceDir, '--show-bad-code', apkPath], {
+    env: { ...process.env, JADX_OPTS: `-Xmx${JADX_XMX}` },
+  }).catch((e) => {
     // jadx returns non-zero on partial-failure classes; still usable output.
     job.partialSourceWarning = e.message;
   });
