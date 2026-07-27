@@ -8,14 +8,31 @@ const multer = require('multer');
 const archiver = require('archiver');
 const xml2js = require('xml2js');
 const { v4: uuid } = require('uuid');
+const { createClient } = require('@supabase/supabase-js');
 
 const APKTOOL_JAR = process.env.APKTOOL_JAR || '/opt/tools/apktool.jar';
 const JADX_BIN = process.env.JADX_BIN || '/opt/tools/jadx/bin/jadx';
 const WORK_ROOT = process.env.WORK_ROOT || path.join(os.tmpdir(), 'apk-jobs');
 const MAX_UPLOAD_MB = parseInt(process.env.MAX_UPLOAD_MB || '250', 10);
-const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour, then a job's files are swept
+const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour, then a job's files (and storage objects) are swept
 const APKTOOL_XMX = process.env.APKTOOL_XMX || '384m';
 const JADX_XMX = process.env.JADX_XMX || '384m';
+
+// ---------- Optional external storage (Supabase Storage) ----------
+// If SUPABASE_URL + SUPABASE_SERVICE_KEY are set, finished zips are uploaded there and
+// served via signed URLs instead of staying only on this container's ephemeral disk.
+// Without them, the service falls back to streaming zips straight from local disk.
+const SUPABASE_URL = process.env.SUPABASE_URL || null;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || null;
+const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'apk-decompiles';
+const supabase = (SUPABASE_URL && SUPABASE_SERVICE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { auth: { persistSession: false } })
+  : null;
+if (supabase) {
+  console.log(`External storage enabled — uploading results to Supabase bucket "${SUPABASE_BUCKET}"`);
+} else {
+  console.log('External storage not configured — serving downloads from local disk (set SUPABASE_URL + SUPABASE_SERVICE_KEY to enable)');
+}
 
 fs.mkdirSync(WORK_ROOT, { recursive: true });
 
@@ -31,6 +48,11 @@ function sweepExpiredJobs() {
   for (const [id, job] of jobs.entries()) {
     if (now - job.createdAt > JOB_TTL_MS) {
       fsp.rm(job.dir, { recursive: true, force: true }).catch(() => {});
+      if (supabase) {
+        supabase.storage.from(SUPABASE_BUCKET)
+          .remove([`${id}/full.zip`, `${id}/source.zip`, `${id}/resources.zip`])
+          .catch(() => {});
+      }
       jobs.delete(id);
     }
   }
@@ -70,6 +92,7 @@ app.post('/api/upload', (req, res, next) => {
     dir,
     apkName: null,
     summary: null,
+    downloadUrls: null,
     createdAt: Date.now(),
   });
   req.jobId = jobId;
@@ -123,12 +146,21 @@ app.get('/api/download/:id/:kind', async (req, res) => {
     return res.status(404).json({ error: 'Job not ready or expired.' });
   }
   const kind = req.params.kind;
+  if (!['full', 'resources', 'source'].includes(kind)) {
+    return res.status(400).json({ error: 'Unknown download kind.' });
+  }
+
+  // Prefer external storage if this job's results were uploaded there.
+  if (job.downloadUrls && job.downloadUrls[kind]) {
+    return res.redirect(job.downloadUrls[kind]);
+  }
+
+  // Fallback: stream directly from local disk.
   const targets = {
     full: [path.join(job.dir, 'resources'), path.join(job.dir, 'java_source')],
     resources: [path.join(job.dir, 'resources')],
     source: [path.join(job.dir, 'java_source')],
   }[kind];
-  if (!targets) return res.status(400).json({ error: 'Unknown download kind.' });
 
   const base = (job.apkName || 'app').replace(/\.apk$/i, '');
   res.attachment(`${base}-${kind}.zip`);
@@ -162,6 +194,51 @@ function run(cmd, args, opts = {}) {
   });
 }
 
+async function zipPaths(dirPaths, outFile) {
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(outFile);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    output.on('close', resolve);
+    archive.on('error', reject);
+    archive.pipe(output);
+    for (const p of dirPaths) {
+      if (fs.existsSync(p)) archive.directory(p, path.basename(p));
+    }
+    archive.finalize();
+  });
+}
+
+async function uploadResultsToStorage(jobId, job, resourcesDir, sourceDir) {
+  if (!supabase) return;
+  const kinds = {
+    full: [resourcesDir, sourceDir],
+    resources: [resourcesDir],
+    source: [sourceDir],
+  };
+  const urls = {};
+  for (const [kind, dirs] of Object.entries(kinds)) {
+    const zipPath = path.join(job.dir, `${kind}.zip`);
+    try {
+      await zipPaths(dirs, zipPath);
+      const buffer = await fsp.readFile(zipPath);
+      const objectPath = `${jobId}/${kind}.zip`;
+      const { error: uploadErr } = await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .upload(objectPath, buffer, { contentType: 'application/zip', upsert: true });
+      if (uploadErr) throw uploadErr;
+      const { data: signedData, error: signErr } = await supabase.storage
+        .from(SUPABASE_BUCKET)
+        .createSignedUrl(objectPath, Math.floor(JOB_TTL_MS / 1000));
+      if (signErr) throw signErr;
+      urls[kind] = signedData.signedUrl;
+    } catch (e) {
+      console.error(`Supabase upload failed for ${kind}:`, e.message || e);
+      // Leave this kind unset — the download route falls back to local disk for it.
+    }
+  }
+  if (Object.keys(urls).length) job.downloadUrls = urls;
+}
+
 async function runPipeline(jobId) {
   const job = jobs.get(jobId);
   const apkPath = path.join(job.dir, 'input.apk');
@@ -183,6 +260,16 @@ async function runPipeline(jobId) {
 
   job.stage = 'Reading manifest & building summary';
   job.summary = await buildSummary(resourcesDir, apkPath);
+
+  if (supabase) {
+    job.stage = 'Uploading results to storage';
+    await uploadResultsToStorage(jobId, job, resourcesDir, sourceDir);
+    // Once all three zips live in external storage, free the ephemeral disk immediately
+    // rather than waiting for the 1-hour sweep.
+    if (job.downloadUrls && job.downloadUrls.full && job.downloadUrls.resources && job.downloadUrls.source) {
+      fsp.rm(job.dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
 
   job.status = 'done';
   job.stage = 'Complete';

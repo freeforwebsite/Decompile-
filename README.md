@@ -26,6 +26,30 @@ Tested end-to-end locally with apktool 3.0.2 + jadx 1.5.6 against a real sample 
 - `GET /api/download/:jobId/full|source|resources` — streams a zip of the requested output.
 - Jobs and their files are swept from disk after 1 hour.
 
+## External storage (optional, recommended)
+
+By default, finished zips live on Render's disk and vanish on every restart/redeploy (and
+after the 1-hour sweep). Set these two env vars on the Render service to instead upload
+results to Supabase Storage and serve them via signed URLs:
+
+- `SUPABASE_URL` — your project URL
+- `SUPABASE_SERVICE_KEY` — the **service_role** key (not the anon key — this needs write
+  access to Storage), from Project Settings → API
+- `SUPABASE_BUCKET` — optional, defaults to `apk-decompiles`
+
+Setup:
+1. In your Supabase project, go to Storage → Create bucket → name it `apk-decompiles`
+   (or whatever you set `SUPABASE_BUCKET` to) → **keep it private** (not public).
+2. Add the two env vars above under the Render service's Environment tab, then redeploy.
+
+With these set, the service zips each job's output, uploads it, generates a 1-hour signed
+URL, and — once all three zips are safely in storage — deletes the local copy immediately
+to free the container's disk right away rather than waiting for the sweep. Without these
+vars set, nothing changes: it streams zips straight from local disk exactly as before.
+
+**Note:** this does not change how much RAM apktool/jadx need during decompilation — see
+"Memory sizing" above for that. Storage only affects where the *finished* files live.
+
 ## Memory sizing (important)
 
 apktool and jadx are both JVM tools, and each is capped to a `-Xmx` heap ceiling
