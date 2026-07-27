@@ -122,7 +122,12 @@
     color: var(--dim);
   }
   .dot{ width:8px; height:8px; border-radius:50%; background: var(--panel-line); }
-  .dot.live{ background: var(--amber); box-shadow: 0 0 0 3px rgba(232,163,61,0.15); }
+  .dot.live{ background: var(--amber); box-shadow: 0 0 0 3px rgba(232,163,61,0.15); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse{
+    0%, 100% { box-shadow: 0 0 0 3px rgba(232,163,61,0.15); }
+    50% { box-shadow: 0 0 0 7px rgba(232,163,61,0.05); }
+  }
+  .elapsed{ color: var(--dim); font-family: var(--mono); font-size: 12px; margin-left: 2px; }
   .ring{ display:none; flex-shrink:0; }
   .ring.show{ display:block; }
   .ring circle{ transition: stroke-dashoffset .2s ease; }
@@ -145,6 +150,7 @@
   .console-log .ln{ color: var(--dim); margin-right: 10px; }
   .console-log .done{ color: var(--teal); }
   .console-log .err{ color: var(--danger); }
+  .console-log .dim{ color: var(--dim); font-style: italic; }
 
   .results{ display:none; margin-top: 28px; }
   .summary-grid{
@@ -270,7 +276,7 @@
         </svg>
         <span class="ring-pct" id="ringPct" style="display:none">0%</span>
         <span class="dot live" id="consoleDot"></span>
-        <span id="consoleLabel">Working…</span>
+        <span id="consoleLabel">Working…</span><span class="elapsed" id="elapsedLabel"></span>
       </div>
       <div class="console-log" id="consoleLog"></div>
     </div>
@@ -310,6 +316,31 @@ const consoleEl = document.getElementById('console');
 const consoleLog = document.getElementById('consoleLog');
 const consoleDot = document.getElementById('consoleDot');
 const consoleLabel = document.getElementById('consoleLabel');
+const elapsedLabel = document.getElementById('elapsedLabel');
+let elapsedTimer = null;
+let stageStartedAt = null;
+let heartbeatCount = 0;
+
+function startElapsedTimer(){
+  stopElapsedTimer();
+  stageStartedAt = Date.now();
+  heartbeatCount = 0;
+  elapsedTimer = setInterval(() => {
+    const secs = Math.floor((Date.now() - stageStartedAt) / 1000);
+    elapsedLabel.textContent = ` · ${secs}s elapsed`;
+    // Every 8s of silence on the same stage, drop a reassurance line so the log keeps moving.
+    if (secs > 0 && secs % 8 === 0) {
+      const thisBeat = Math.floor(secs / 8);
+      if (thisBeat !== heartbeatCount) {
+        heartbeatCount = thisBeat;
+        log('still running (' + secs + 's) — large APKs can take a while here', 'dim');
+      }
+    }
+  }, 1000);
+}
+function stopElapsedTimer(){
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+}
 const uploadRing = document.getElementById('uploadRing');
 const uploadRingCircle = document.getElementById('uploadRingCircle');
 const ringPct = document.getElementById('ringPct');
@@ -398,6 +429,8 @@ goBtn.addEventListener('click', async () => {
   consoleLog.innerHTML = '';
   logLine = 0;
   lastStage = null;
+  stopElapsedTimer();
+  elapsedLabel.textContent = '';
   setUploadProgress(0);
   log('uploading ' + selectedFile.name + ' …');
 
@@ -407,6 +440,7 @@ goBtn.addEventListener('click', async () => {
     jobId = data.jobId;
     switchToProcessingIndicator();
     log('accepted — job ' + jobId);
+    startElapsedTimer();
   } catch (err) {
     uploadRing.classList.remove('show');
     ringPct.style.display = 'none';
@@ -430,10 +464,13 @@ function poll(jobId){
       if(data.stage && data.stage !== lastStage){
         log(data.stage + ' …');
         lastStage = data.stage;
+        startElapsedTimer();
       }
 
       if(data.status === 'error'){
         clearInterval(iv);
+        stopElapsedTimer();
+        elapsedLabel.textContent = '';
         consoleDot.classList.remove('live');
         log(data.error || 'Decompilation failed.', 'err');
         showError(data.error || 'Decompilation failed.');
@@ -443,6 +480,8 @@ function poll(jobId){
 
       if(data.status === 'done'){
         clearInterval(iv);
+        stopElapsedTimer();
+        elapsedLabel.textContent = '';
         consoleDot.classList.remove('live');
         log('done.', 'done');
         consoleLabel.textContent = 'Complete';
@@ -451,6 +490,8 @@ function poll(jobId){
       }
     } catch (err) {
       clearInterval(iv);
+      stopElapsedTimer();
+      elapsedLabel.textContent = '';
       consoleDot.classList.remove('live');
       showError(err.message);
       goBtn.disabled = false;
