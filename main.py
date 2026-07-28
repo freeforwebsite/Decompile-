@@ -76,7 +76,8 @@ async def index_new_upload(client: Client, message: Message):
 @app.on_message(filters.private & filters.command("start"))
 async def start(client: Client, message: Message):
     await message.reply_text(
-        "Send me a title and I'll search the indexed channel for matching files."
+        "🎬 Welcome to My Movie Bot!\n\n"
+        "Send me a movie name to search."
     )
 
 
