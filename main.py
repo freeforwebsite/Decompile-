@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -9,6 +12,28 @@ from database import movies
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("movie-db-bot")
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, *args):
+        pass  # keep Render's log stream focused on the bot, not health pings
+
+
+def start_health_server():
+    """Render's Web Service tier requires something bound to $PORT, or it assumes the
+    service crashed and keeps restarting it. This bot doesn't serve real traffic — this
+    listener exists purely to satisfy that port scan. If this service is ever recreated
+    as a Background Worker instead, this block (and the PORT env var) becomes unnecessary."""
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    log.info("Health check listener bound on port %s", port)
 
 app = Client(
     "movie-db-bot",
@@ -81,6 +106,7 @@ async def search(client: Client, message: Message):
 
 
 async def main():
+    start_health_server()
     await app.start()
     log.info("Movie DB Bot started successfully.")
     await asyncio.Event().wait()  # keep the process alive
