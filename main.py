@@ -53,57 +53,79 @@ def extract_media(message: Message):
     return None, None, None
 
 
+@app.on_message(group=-1)
+async def log_every_update(client: Client, message: Message):
+    """Diagnostic only: logs every incoming message regardless of filters, so we can
+    tell whether updates are reaching the bot at all vs. failing inside a handler."""
+    log.info(
+        "INCOMING update: chat_id=%s chat_type=%s text=%r from_user=%s",
+        message.chat.id,
+        message.chat.type,
+        message.text,
+        message.from_user.id if message.from_user else None,
+    )
+
+
 @app.on_message(filters.chat(CHANNEL_ID) & (filters.document | filters.video | filters.audio))
 async def index_new_upload(client: Client, message: Message):
     """Whenever a file lands in your channel, record it so it becomes searchable."""
-    file_id, file_name, caption = extract_media(message)
-    if not file_id:
-        return
-    await movies.update_one(
-        {"message_id": message.id},
-        {"$set": {
-            "message_id": message.id,
-            "chat_id": message.chat.id,
-            "file_id": file_id,
-            "file_name": file_name,
-            "caption": caption,
-        }},
-        upsert=True,
-    )
-    log.info("Indexed: %s", file_name)
+    try:
+        file_id, file_name, caption = extract_media(message)
+        if not file_id:
+            return
+        await movies.update_one(
+            {"message_id": message.id},
+            {"$set": {
+                "message_id": message.id,
+                "chat_id": message.chat.id,
+                "file_id": file_id,
+                "file_name": file_name,
+                "caption": caption,
+            }},
+            upsert=True,
+        )
+        log.info("Indexed: %s", file_name)
+    except Exception:
+        log.exception("index_new_upload failed")
 
 
 @app.on_message(filters.private & filters.command("start"))
 async def start(client: Client, message: Message):
-    await message.reply_text(
-        "🎬 Welcome to My Movie Bot!\n\n"
-        "Send me a movie name to search."
-    )
+    try:
+        await message.reply_text(
+            "🎬 Welcome to My Movie Bot!\n\n"
+            "Send me a movie name to search."
+        )
+    except Exception:
+        log.exception("start handler failed")
 
 
 @app.on_message(filters.private & filters.text & ~filters.command("start"))
 async def search(client: Client, message: Message):
-    query = message.text.strip()
-    if not query:
-        return
-    cursor = movies.find(
-        {"file_name": {"$regex": query, "$options": "i"}}
-    ).limit(10)
-    results = await cursor.to_list(length=10)
+    try:
+        query = message.text.strip()
+        if not query:
+            return
+        cursor = movies.find(
+            {"file_name": {"$regex": query, "$options": "i"}}
+        ).limit(10)
+        results = await cursor.to_list(length=10)
 
-    if not results:
-        await message.reply_text(f"No matches for \u201c{query}\u201d.")
-        return
+        if not results:
+            await message.reply_text(f"No matches for \u201c{query}\u201d.")
+            return
 
-    for doc in results:
-        try:
-            await client.copy_message(
-                chat_id=message.chat.id,
-                from_chat_id=doc["chat_id"],
-                message_id=doc["message_id"],
-            )
-        except Exception as e:
-            log.warning("Couldn't deliver %s: %s", doc.get("file_name"), e)
+        for doc in results:
+            try:
+                await client.copy_message(
+                    chat_id=message.chat.id,
+                    from_chat_id=doc["chat_id"],
+                    message_id=doc["message_id"],
+                )
+            except Exception as e:
+                log.warning("Couldn't deliver %s: %s", doc.get("file_name"), e)
+    except Exception:
+        log.exception("search handler failed")
 
 
 async def main():
